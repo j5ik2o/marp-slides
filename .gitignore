@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+/.claude/settings.local.json
+/.codex/sessions/
+/.codex/tmp
+/.codex/log/
+/.codex/shell_snapshots/*.sh
+/.codex/*.json
+/.codex/*.jsonl
+/.codex/.personality_migration
+/.serena/cache/
