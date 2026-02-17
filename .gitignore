@@ -1,5 +1,6 @@
 node_modules/
 dist/
+slides/**/*.html
 
 /.claude/settings.local.json
 /.codex/sessions/
