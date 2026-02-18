@@ -43,6 +43,8 @@ style: |
 
 ## AI駆動開発時代のシフトレフト戦略
 
+## 加藤潤一(@j5ik2o)
+
 ---
 
 # プロフィール
@@ -51,17 +53,9 @@ style: |
 
 ## 加藤潤一
 
-**経歴**
-- 10歳からプログラミング開始
 - 2014-2024年: kubell（旧Chatwork）
 - 2025年1月: 独立（IDEO PLUS合同会社 代表）
-
-**専門分野**
-- ドメイン駆動設計（DDD）
-- 関数型プログラミング
-- 分散システム設計
-
-15年以上のDDD実践経験 | Chatworkの大規模リアーキテクチャを主導
+- DDD / 関数型 / 分散システム設計 / AI-DLC
 
 ---
 
@@ -219,6 +213,79 @@ modules/actor/src/
 
 <!-- _class: title -->
 
+# TAKT: AIエージェントオーケストレーション
+
+---
+
+# TAKTとは
+
+**T**AKT **A**gent **K**oordination **T**opology
+https://github.com/nrslib/takt
+
+AIエージェントの協調手順・介入ポイント・記録を**YAMLで定義する**
+
+```bash
+takt                       # 対話モードで要件を詰めてから実行
+takt --task "機能を追加"     # 直接タスク実行
+takt #6                    # GitHub Issueをタスクとして実行
+takt --pipeline --auto-pr  # CI/CDパイプライン実行
+```
+
+**「誰が・何を見て・何を守り・何をするか」をワークフローとして宣言**
+
+---
+
+# Faceted Prompting: プロンプトの関心の分離
+
+モノリシックなプロンプトを**5つの独立した関心**に分解し、宣言的に合成する
+
+| 関心 | 答える問い | 例 |
+|------|-----------|-----|
+| **Persona** | *誰*として判断するか？ | planner, coder, reviewer |
+| **Policy** | *何を*守るか？ | コーディング規約、禁止事項 |
+| **Instruction** | *何を*するか？ | ステップ固有の手順 |
+| **Knowledge** | *何を*参照するか？ | アーキテクチャ、ドメイン知識 |
+| **Output Contract** | *どう*出すか？ | レビューレポートの形式 |
+
+**1ファイル = 1つの関心 → 変更が他のファセットに波及しない**
+
+---
+
+# ピース: ワークフローをYAMLで定義する
+
+<style scoped>
+pre { font-size: 0.7em; }
+</style>
+
+```yaml
+name: default
+initial_movement: plan
+movements:
+  - name: plan
+    persona: planner          # WHO
+    knowledge: architecture   # CONTEXT
+    edit: false
+    rules:
+      - condition: 要件が明確で実装可能
+        next: implement
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+  - name: implement
+    persona: coder            # WHO
+    policy: [coding, testing] # RULES
+    knowledge: architecture   # CONTEXT
+    edit: true
+    rules:
+      - condition: 実装完了
+        next: ai_review
+      - condition: 進行不可
+        next: ABORT
+```
+
+---
+
+<!-- _class: title -->
+
 # レイヤー2: 仕様駆動開発
 
 ---
@@ -234,189 +301,157 @@ modules/actor/src/
 
 ---
 
-# cc-sddを使った仕様駆動開発
-
+# TAKTを使った仕様駆動開発
 
 ---
 
-# cc-sdd: プロジェクトのステアリング
+# SDDの各フェーズをTAKTピースに落とし込む
 
-既存コードがある場合、以下のコマンドを実行する
+<style scoped>
+table { font-size: 0.75em; }
+</style>
+
+| Phase | ピース | ペルソナ | やること |
+|-------|--------|---------|---------|
+| 1 | `sdd-requirements` | requirements-analyst | EARS形式で要件生成 |
+| 1.5 | `sdd-validate-gap` | planner | 既存コードとのギャップ分析 |
+| 2 | `sdd-design` | planner | 技術設計 + 発見ログ |
+| 2.5 | `sdd-validate-design` | architecture-reviewer | GO/NO-GO 判定 |
+| 3 | `sdd-tasks` | planner | 実装タスク分解 |
+| 4 | `sdd-impl` | coder + reviewers | 実装 + 多段階レビュー |
+| 5 | `sdd-validate-impl` | arch + qa + supervisor | 並列検証 |
+
+**各フェーズを個別にも、全自動（`sdd`）でも実行可能**
+
+---
+
+# Phase 1: EARS形式で要件を生成する
 
 ```bash
-# Step 0: AIが既存プロジェクトコンテキストを学習
-/kiro:steering
+takt -w sdd-requirements  # Phase 1 のみ実行
 ```
 
-`.kiro/steering/` に置くプロジェクト知識をAIが常時参照する
+```yaml
+# sdd-requirements.yaml
+movements:
+  - name: generate-requirements
+    persona: requirements-analyst   # 要件分析の専門家
+    policy: ears-format             # EARS形式を強制
+    instruction: generate-requirements
+    output_contracts:
+      report:
+        - name: requirements.md
+          format: sdd-requirements
+    rules:
+      - condition: 要件が明確で完全
+        next: COMPLETE
+      - condition: 情報不足、要件が不明確
+        next: ABORT
+```
 
-| ファイル | 内容 |
+---
+
+# EARS形式: テスト可能な要件を書く
+
+<style scoped>
+table { font-size: 0.8em; }
+</style>
+
+| パターン | 構文 |
 |---------|------|
-| `product.md` | プロダクトビジョン、価値提案、ユースケース |
-| `tech.md` | 技術スタック、モジュール構成、設計判断 |
-| `structure.md` | ディレクトリ構造、命名規約、依存方向 |
+| イベント駆動 | [イベント]が起きたとき、[システム]は[応答]しなければならない |
+| 状態駆動 | [条件]ならば、[システム]は[応答]しなければならない |
+| 望ましくない振る舞い | [望ましくないイベント]が発生した場合、[システム]は[応答]しなければならない |
+| 常時 | [システム]は常に[応答]しなければならない |
 
-AIが「このプロジェクトは何を目指しているか」を理解した上でコードを書く
+**曖昧な「適切に」「迅速に」は REJECT → 検証可能な基準に置き換える**
 
 ---
 
-# cc-sdd: 要件定義フェーズ
+# Phase 2-3: 設計 → 品質ゲート → タスク分解
 
 ```bash
-# Step 1: 仕様の初期化
-/kiro:spec-init distributed-pubsubを実装する
-
-# Step 2: 要件定義（AIが質問し、人間が回答・承認）
-/kiro:spec-requirements distributed-pubsub
+takt -w sdd-design           # 技術設計を生成
+takt -w sdd-validate-design  # GO/NO-GO 判定
+takt -w sdd-tasks            # タスクに分解
 ```
+
+```yaml
+# sdd-validate-design.yaml
+- name: validate-design
+  persona: architecture-reviewer    # 設計レビュー専門家
+  policy: sdd-design-review         # 設計品質基準
+  rules:
+    - condition: GO（設計品質十分）
+      next: COMPLETE
+    - condition: NO-GO（重大な問題あり）
+      next: ABORT
+```
+
+**設計が品質ゲートを通過しないと次へ進めない**
 
 ---
 
-# cc-sdd: 生成される要件の例
-
-AIが生成し、人間が承認する要件ドキュメント（実例から抜粋）
-
-```markdown
-### 要件1: トピック購読と送達
-**目的:** トピック単位で購読と送達を行い、
-分散配置でも同一のPubSub体験を得たい。
-
-#### 受け入れ条件
-1. 購読要求が起きたとき、購読を登録しなければならない
-2. 購読解除要求が起きたとき、送達を停止しなければならない
-3. メッセージ公開が起きたとき、購読者へ送達しなければならない
-4. 購読者が存在しないならば、観測できるようにしなければならない
-```
-
-**「〜しなければならない」形式で、検証可能な受入条件を定義する**
-
----
-
-# cc-sdd: 設計フェーズ
+# Phase 4-5: 実装 → 多段階レビュー → 検証
 
 ```bash
-# Step 3: 設計（AIが設計、人間が検証・承認）
-/kiro:spec-design distributed-pubsub
+takt -w sdd-impl             # 実装 + AIレビュー
+takt -w sdd-validate-impl    # 並列検証（arch + qa + impl）
+```
 
-# Step 4: 設計の検証(品質ゲート)
-/kiro:validate-design distributed-pubsub
+```yaml
+# sdd-validate-impl.yaml — 3名の専門家が並列検証
+- name: validate
+  parallel:
+    - name: arch-review         # アーキテクチャレビュー
+      persona: architecture-reviewer
+    - name: qa-review           # QAレビュー
+      persona: qa-reviewer
+    - name: impl-validation     # 要件・設計との整合性検証
+      persona: supervisor
+  rules:
+    - condition: all("approved","approved","検証合格")
+      next: COMPLETE
+    - condition: any("needs_fix","検証不合格")
+      next: fix
 ```
 
 ---
 
-# cc-sdd: 生成される設計の例
-
-AIが生成する設計ドキュメント（実例から抜粋）
-
-```markdown
-## 目標
-- トピック購読/解除/公開のAPIを提供
-- バッチ条件で配送を制御
-- トポロジ更新に追従し、到達不能ノードへの配送を停止
-
-## 非目標
-- Exactly-once 配送や永続キュー
-- 複数クラスタ間のフェデレーション
-- コンテンツベースのフィルタリング
-```
-
-**「非目標」の明示がスコープ逸脱を防ぐ**
-
----
-
-# cc-sdd: 設計の要件トレーサビリティ
-
-要件と設計コンポーネントの対応を明示する
-
-```markdown
-## 要件トレーサビリティ
-| 要件 | 対応コンポーネント |
-|------|------------------|
-| 購読/送達の正当性 | PubSubApi, TopicActor |
-| バッチ条件と個別配送 | BatchingProducer |
-| 受理/拒否と公開制御 | PubSubPublisher |
-| トポロジ追従 | ClusterEvent, DeliveryActor |
-| 観測性とメトリクス | PubSubMetrics, EventStream |
-```
-
-**要件 → 設計の追跡可能性が、レビューの論点を明確にする**
-
----
-
-# cc-sdd: タスク分解フェーズ
+# フルオート: sdd.yaml で全フェーズを自動遷移
 
 ```bash
-# Step 5: タスク分解（実装タスクに分解）
-/kiro:spec-tasks distributed-pubsub
+takt -w sdd  # 要件→ギャップ分析→設計→レビュー→タスク→実装→検証
 ```
 
----
-
-# cc-sdd: 実装フェーズ
-
-```bash
-# Step 6: TDDで実装
-/kiro:spec-impl distributed-pubsub
-
-# Step 7: 実装の検証
-/kiro:validate-impl distributed-pubsub
+```
+要件生成 → ギャップ分析 → 設計生成 → 設計レビュー → タスク生成
+                                      ↓ NO-GO                ↓
+                                    設計やり直し     plan → implement → review
+                                                      ↑                   ↓
+                                                      └── fix ←── supervise
 ```
 
-**各フェーズで人間がゲートを設け、AIの暴走を防ぐ**
+**人間の介入なしで全フェーズを自動実行し、品質ゲートで制御**
 
 ---
 
-# もっと軽量なプロセスもある
+# 各フェーズで使われるファセット
 
----
+<style scoped>
+table { font-size: 0.75em; }
+</style>
 
-# 軽量な制約カード
+| ファセット種別 | ファイル | 役割 |
+|--------------|---------|------|
+| **Persona** | requirements-analyst.md | EARS要件の専門家 |
+| **Policy** | ears-format.md | EARS記述規約の強制 |
+| **Policy** | sdd-design-review.md | GO/NO-GO判定基準 |
+| **Instruction** | generate-requirements.md | 要件生成の手順 |
+| **Knowledge** | design-discovery.md | 設計時の発見記録ガイド |
+| **Output Contract** | sdd-requirements.md | 要件ドキュメントの出力形式 |
 
-重厚な仕様書ではなく、**AIの解空間を絞るチェックリスト**
-
-```markdown
-# streams-phase1-trivial-gaps
-status: active
-
-## Intent
-6つのtrivialなギャップを実装する
-```
-
----
-
-# 制約カード: MUST / MUST NOT
-
-```markdown
-## MUST
-- TDD（テストファースト）
-- ci-check.sh が全パス
-
-## MUST NOT
-- Attributes system の導入
-- KillSwitch trait の抽出
-
-## Tasks
-- [ ] ClosedShape
-- [ ] Flow::from_function
-- [ ] KillSwitches::shared / single
-```
-
-**散文の仕様書ではなく、AIがチェック可能な制約リスト**
-
----
-
-# 仕様があるとレビューが変わる
-
-## 仕様なし
-- 「この実装で合ってる？」（レビュアーが仕様を推測）
-- 「ここ、こうした方がいいんじゃない？」（主観的）
-
-## 仕様あり
-- 「制約カードのMUSTを満たしているか？」（客観的）
-- 「受入テストはPassしているか？」（検証可能）
-- 「MUST NOTに逸脱していないか？」（スコープガード）
-
-**レビューが「判断」から「検証」に変わる**
+**ファセットを差し替えるだけで、SDDプロセスをカスタマイズできる**
 
 ---
 
@@ -605,7 +640,7 @@ fraktor-rs 独自のプラクティス
     /              \  ← Rules 13個 + Skills 31個
    /                \    不変性・CQS・既存パターン準拠
   /------------------\
- /                    \← 制約カード + Steering
+ /                    \← TAKT Knowledge + Steering
 /______________________\  要件定義・受入基準・プロダクトビジョン
 ```
 
@@ -623,9 +658,9 @@ fraktor-rs 独自のプラクティス
 
 | レイヤー | やること | fraktor-rs での実装 |
 |---------|---------|-------------------|
-| 要件分割 | タスクを小さく絞り込む | Kiro の3フェーズ承認制 |
-| 仕様定義 | 制約カードで基準を明確化 | `.constraints/*.md` |
-| コンテキスト | AIに永続的知識を与える | Steering ドキュメント |
+| 要件分割 | タスクを小さく絞り込む | TAKT 対話モード + ピース実行 |
+| 仕様定義 | TAKTピースで基準を明確化 | ピースYAML + ファセット |
+| コンテキスト | AIに永続的知識を与える | TAKT Knowledge ファセット |
 | ルール注入 | Rules/Skillsで規約を強制 | 13 Rules + 31 Skills |
 | 自動検査 | カスタムリンター | 8 Dylint + Clippy |
 | レビュー | 設計判断に集中 | **本来の役割に集中** |
@@ -636,13 +671,13 @@ fraktor-rs 独自のプラクティス
 
 | 指標 | 数値 |
 |------|------|
-| 完了した仕様 | 32件（`.kiro/archive/`） |
+| 完了した仕様 | 32件（TAKT ピース実行） |
 | ルール | 13個（共有8 + Rust固有5） |
 | スキル | 31個（うちプロジェクト固有4個） |
 | カスタムリンター | 8個（Dylint） |
 | CI チェック項目 | 7カテゴリ（format, lint, dylint, clippy, test, doc, embedded） |
 
-**32件の仕様を仕様駆動で実装し、レビュー負荷を最小化**
+**32件の仕様をTAKTで駆動し、レビュー負荷を最小化**
 
 ---
 
@@ -663,8 +698,8 @@ fraktor-rs 独自のプラクティス
 # 実践のステップ
 
 1. **まず**: CLAUDE.md / Rulesを整備する（即効性が高い）
-2. **次に**: Steeringドキュメントでプロジェクト知識を整理する
-3. **そして**: 要件を小さく分割し、制約カードで仕様化する
+2. **次に**: TAKT Knowledge ファセットでプロジェクト知識を整理する
+3. **そして**: 要件を小さく分割し、TAKTピースで仕様化する
 4. **さらに**: カスタムリンターで機械的チェックを自動化する
 5. **加えて**: プロジェクト固有のスキルを作成する
 6. **最後に**: レビュープロセスを再定義する
